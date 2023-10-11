@@ -17,13 +17,36 @@ import User from "./src/datasources/user.js";
 import spot from "./src/models/spot.js";
 import user from "./src/models/user.js";
 
+(async function server(){
+
 const { MONGODB_CONNECTION_STRING } = process.env;
 
 const { json } = pkg;
 
+let dbInstance = null;
+(async function () {
+  if (dbInstance) return;
+  await mongoose
+    .connect(MONGODB_CONNECTION_STRING, {
+      useNewUrlParser: true,
+      useUnifiedTopology: true,
+    })
+    .then(async (response) => {
+      dbInstance = response;
+      console.log("🎉 connected to database successfully");
+
+      await new Promise((resolve) =>
+        httpServer.listen({ port: 4000 }, resolve)
+      );
+      console.log(`🚀 Server ready at http://localhost:4000/graphql`);
+    })
+    .catch((error) => console.error(error));
+})();
+
 const app = express();
 const httpServer = http.createServer(app);
 const server = new ApolloServer({
+  introspection : true,
   typeDefs,
   resolvers,
   plugins: [ApolloServerPluginDrainHttpServer({ httpServer })],
@@ -53,22 +76,4 @@ app.use(
   })
 );
 
-let dbInstance = null;
-(async function () {
-  if (dbInstance) return;
-  await mongoose
-    .connect(MONGODB_CONNECTION_STRING, {
-      useNewUrlParser: true,
-      useUnifiedTopology: true,
-    })
-    .then(async (response) => {
-      dbInstance = response;
-      console.log("🎉 connected to database successfully");
-
-      await new Promise((resolve) =>
-        httpServer.listen({ port: 4000 }, resolve)
-      );
-      console.log(`🚀 Server ready at http://localhost:4000/graphql`);
-    })
-    .catch((error) => console.error(error));
-})();
+})()
