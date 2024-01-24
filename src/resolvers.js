@@ -2,7 +2,7 @@
 // This resolver retrieves users from the "users" array above.
 import jwt from "jsonwebtoken";
 import bcrypt from "bcrypt";
-import { object, string, ValidationError } from "yup";
+import { object, string } from "yup";
 
 import {
   extractToken,
@@ -15,11 +15,44 @@ import {
   sendResetPasswordMail,
   verificationCodeExpiry,
 } from "./utils/helper.js";
+import {
+  extractAllFileUrls,
+  handleDeleteFileUpload,
+  handleDeleteTextUpload,
+  handleFileUpload,
+  handleMultipleFileUploads,
+  handleTextUpload,
+} from "./utils/firebaseConfig.js";
 
 export default {
   Query: {
     getUsers: async (_, {}, { dataSources }) => {
-      return dataSources.Users.getUsers();
+      try {
+        return dataSources.Users.getUsers();
+      } catch (error) {
+        return FailedRequestErrorHandler(error);
+      }
+    },
+    getSpots: async (_, {}, { dataSources }) => {
+      try {
+        return dataSources.Spots.getSpots();
+      } catch (error) {
+        return FailedRequestErrorHandler(error);
+      }
+    },
+    getUserSpots: async (_, creator, { dataSources: { Spots } }) => {
+      try {
+        return Spots.getUserSpots(creator);
+      } catch (error) {
+        return FailedRequestErrorHandler(error);
+      }
+    },
+    getPopularSpots: async (_, {}, { dataSources }) => {
+      try {
+        return dataSources.Spots.getPopularSpots();
+      } catch (error) {
+        return FailedRequestErrorHandler(error);
+      }
     },
   },
   Mutation: {
@@ -152,7 +185,7 @@ export default {
       { dataSources, token }
     ) => {
       try {
-        const decodedToken = jwt.decode(token);
+        const decodedToken = jwt.decode(extractToken(token));
         if (decodedToken?.id) {
           let user = await dataSources.Users.getUserByParams({
             _id: decodedToken.id,
@@ -194,7 +227,7 @@ export default {
     },
     resendVerificationCode: async (_, {}, { dataSources, token }) => {
       try {
-        const decodedToken = jwt.decode(token);
+        const decodedToken = jwt.decode(extractToken(token));
         if (decodedToken?.id) {
           let user = await dataSources.Users.getUserByParams({
             _id: decodedToken.id,
@@ -264,7 +297,7 @@ export default {
           name: user.firstname,
         });
         return {
-          user: { id: user._id },
+          user,
           code: 200,
           message: "User password reset code has been sent successfully",
           token: null,
@@ -351,11 +384,12 @@ export default {
             message: "User not found",
           });
         }
+        if (userInfo?._doc) userInfo = userInfo?._doc;
 
         if (userInfo?.publicKey || userInfo?.secretKey)
-          return {
+          return FailedRequestErrorHandler({
             message: "user already has credentials",
-          };
+          });
         const updatedUser = await dataSources.Users.updateUser({
           ...userInfo,
           publicKey,
@@ -365,6 +399,103 @@ export default {
           user: updatedUser,
           message: "user credentials updated successfully",
           code: 200,
+        };
+      } catch (error) {
+        return FailedRequestErrorHandler(error);
+      }
+    },
+    createOrUpdateSpot: async (_, { input }, { dataSources, token }) => {
+      try {
+        let spotObject = {
+          ...input,
+        };
+        const reToken = () => {
+          if (token && token.slice(0, 6) == "Bearer")
+            return token.split(" ")[1];
+          return token;
+        };
+        jwt.verify(reToken(), process.env.JWT_SECRET, (err, decoded) => {
+          if (err) throw new Error("You are not authenticated");
+          spotObject.creator = decoded.id;
+        });
+
+        let image = spotObject.image;
+        // save spot image
+        image = await handleFileUpload(image);
+        let video = spotObject.video;
+        // save spot image
+        video = await handleFileUpload(video);
+        // save categories
+        let categories = await handleMultipleFileUploads(spotObject.categories);
+        // save popular categories
+        let popularCategories = await Promise.all(
+          spotObject.popularCategories.map(async (popularCategory) => {
+            const image = await handleFileUpload(popularCategory.image);
+            return {
+              ...popularCategory,
+              image,
+            };
+          })
+        );
+
+        spotObject.image = image;
+        spotObject.video = video;
+        spotObject.categories = categories;
+        spotObject.popularCategories = popularCategories;
+
+        const spot = spotObject?.id
+          ? dataSources.Spots.updateSpot(spotObject)
+          : dataSources.Spots.createSpot(spotObject);
+
+        return {
+          spot,
+          token,
+          code: 200,
+          message: "Spot saved successfully",
+        };
+      } catch (error) {
+        return FailedRequestErrorHandler(error);
+      }
+    },
+    deleteSpots: async (_, { input }, { dataSources, token }) => {
+      try {
+        const reToken = () => {
+          if (token && token.slice(0, 6) == "Bearer")
+            return token.split(" ")[1];
+          return token;
+        };
+        jwt.verify(reToken(), process.env.JWT_SECRET, (err) => {
+          if (err) throw new Error("You are not authenticated");
+        });
+
+        await dataSources.Spots.deleteSpots({
+          _id: { $in: input.spotIds },
+          creator: input.userId,
+        });
+        return {
+          user: null,
+          token: "spots deleted completely",
+          code: 200,
+          message: "Success",
+        };
+      } catch (error) {
+        return FailedRequestErrorHandler(error);
+      }
+    },
+    uploadFile: async (_, { input }, { token }) => {
+      try {
+        console.log({ token });
+        const reToken = () => {
+          return token?.replaceAll("Bearer", "")?.trim();
+        };
+        jwt.verify(reToken(), process.env.JWT_SECRET, (err) => {
+          if (err) throw new Error("You are not authenticated");
+        });
+        const url = await handleTextUpload(input);
+        return {
+          url,
+          code: 200,
+          message: "File uploaded successfully",
         };
       } catch (error) {
         return FailedRequestErrorHandler(error);

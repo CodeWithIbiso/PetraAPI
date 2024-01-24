@@ -32,7 +32,7 @@ await server.start();
 app.use(
   "/graphql",
   cors(),
-  json(),
+  json({ limit: "50mb" }),
   expressMiddleware(server, {
     context: async ({ req }) => {
       const { cache } = server;
